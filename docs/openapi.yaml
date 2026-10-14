@@ -36,6 +36,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /submissions:
     post:
@@ -52,8 +60,21 @@ paths:
         - OMD `NOT_ACTIVATED` → `preferredChannel`. Ja izvēlēts `E_ADDRESS`,
           bet e-adrese nav aktivizēta: `EMAIL`, un `reasonCode` norāda iemeslu.
         - OMD 404 (reģistrā nav ieraksta) → tāpat kā `NOT_ACTIVATED`.
+          404 nenozīmē, ka personas nav, tikai to, ka reģistrā nav ieraksta.
+        - OMD 5xx, noildze (atbilde nav saņemta 3 s laikā), bojāta atbilde
+          vai nedokumentēts statuss → `replyChannel` = `PENDING_CHANNEL_CHECK`,
+          `reasonCode` = `REGISTER_UNAVAILABLE`. Sistēma kanālu neuzmin.
+          Iesniegums tik un tā tiek pieņemts ar `201`; darbinieks kanālu
+          pārbauda vēlāk (automātiska atkārtošana ir ārpus apjoma).
 
-        *CR-2 daļa nav pabeigta: skatīt `tracker/CR-2.md` un A1.*
+        OMD kļūme **nekad** neizraisa šīs operācijas `5xx` atbildi.
+        `5xx` nozīmē tikai pašas sistēmas kļūmi, un tad iesniegums netiek
+        saglabāts.
+
+        Katrs ne-veiksmīgs OMD pārbaudes iznākums tiek žurnalēts ar līmeni
+        WARNING, norādot iesnieguma ID un iemeslu. Personas kods un
+        iesnieguma teksts (`body`) žurnālā netiek ierakstīti. OMD piekļuves
+        marķieri sistēma nolasa no vides mainīgā `OMD_API_TOKEN`.
       requestBody:
         required: true
         content:
@@ -75,8 +96,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SubmissionCreated'
+              examples:
+                eAddressActive:
+                  summary: OMD ACTIVE
+                  value:
+                    id: IES-2026-000123
+                    status: RECEIVED
+                    receivedAt: '2026-10-01T09:15:00Z'
+                    dueDate: '2026-11-02'
+                    replyChannel: E_ADDRESS
+                    reasonCode: null
+                eAddressNotActive:
+                  summary: Izvēlēta E_ADDRESS, bet OMD NOT_ACTIVATED vai 404
+                  value:
+                    id: IES-2026-000124
+                    status: RECEIVED
+                    receivedAt: '2026-10-01T09:20:00Z'
+                    dueDate: '2026-11-02'
+                    replyChannel: EMAIL
+                    reasonCode: E_ADDRESS_NOT_ACTIVE
+                registerUnavailable:
+                  summary: OMD 5xx, noildze vai bojāta atbilde
+                  value:
+                    id: IES-2026-000125
+                    status: RECEIVED
+                    receivedAt: '2026-10-01T09:25:00Z'
+                    dueDate: '2026-11-02'
+                    replyChannel: PENDING_CHANNEL_CHECK
+                    reasonCode: REGISTER_UNAVAILABLE
         '400':
           $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /submissions/{id}:
     get:
@@ -99,8 +154,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Submission'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
 components:
   schemas:
@@ -174,12 +235,7 @@ components:
         replyChannel:
           $ref: '#/components/schemas/ReplyChannel'
         reasonCode:
-          type: string
-          nullable: true
-          description: |
-            Kāpēc `replyChannel` atšķiras no `preferredChannel`.
-            `null`, ja kanāls sakrīt. *CR-2: vērtību saraksts nav pabeigts.*
-          example: E_ADDRESS_NOT_ACTIVE
+          $ref: '#/components/schemas/ReasonCode'
 
     Submission:
       description: Pilns iesnieguma ieraksts
@@ -196,10 +252,27 @@ components:
     ReplyChannel:
       type: string
       description: |
-        Kanāls, pa kuru sūtīs atbildi (nosaka sistēma, CR-2).
-        *CR-2: vērtību saraksts nav pabeigts.*
-      enum: [EMAIL, POST, E_ADDRESS]
+        Kanāls, pa kuru sūtīs atbildi (nosaka sistēma, CR-2):
+        `EMAIL` e-pasts · `POST` pasts · `E_ADDRESS` oficiālā e-adrese ·
+        `PENDING_CHANNEL_CHECK` OMD reģistrs nebija pieejams, kanālu
+        darbinieks pārbaudīs vēlāk.
+      enum: [EMAIL, POST, E_ADDRESS, PENDING_CHANNEL_CHECK]
       example: E_ADDRESS
+
+    ReasonCode:
+      type: string
+      nullable: true
+      description: |
+        Kāpēc `replyChannel` noteikts citādi (CR-2):
+        - `E_ADDRESS_NOT_ACTIVE` iesniedzējs izvēlējās `E_ADDRESS`, bet OMD
+          atbildēja `NOT_ACTIVATED` vai 404. Atbilde tiek sūtīta uz `EMAIL`.
+        - `REGISTER_UNAVAILABLE` OMD atbildēja ar 5xx, neatbildēja 3 s laikā,
+          atbilde bija bojāta vai ar nedokumentētu statusu.
+          `replyChannel` = `PENDING_CHANNEL_CHECK`.
+
+        `null`, ja neviens no šiem gadījumiem nav iestājies.
+      enum: [E_ADDRESS_NOT_ACTIVE, REGISTER_UNAVAILABLE, null]
+      example: E_ADDRESS_NOT_ACTIVE
 
     Topic:
       type: string
@@ -248,6 +321,16 @@ components:
                     example: INVALID_FORMAT
 
   responses:
+    BadRequest:
+      description: Kļūdains pieprasījums
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: BAD_REQUEST
+              message: Bad request
     ValidationError:
       description: Kļūdains pieprasījums. Iesniegums netiek saglabāts.
       content:
@@ -271,3 +354,25 @@ components:
             error:
               code: NOT_FOUND
               message: Submission not found
+    InternalError:
+      description: |
+        Iekšēja sistēmas kļūda. Nekad netiek atgriezta OMD reģistra
+        nepieejamības dēļ (skatīt CR-2).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INTERNAL_ERROR
+              message: Internal server error
+    ServiceUnavailable:
+      description: Serviss īslaicīgi nav pieejams. Pieprasījumu var atkārtot vēlāk.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: SERVICE_UNAVAILABLE
+              message: Service temporarily unavailable
