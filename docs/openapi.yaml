@@ -4,7 +4,7 @@
 openapi: 3.0.3
 info:
   title: Ezermalas pieteikumu sistēma · iesniegumu API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Iedzīvotāju iesniegumu pieņemšana un apskate.
 
@@ -22,6 +22,11 @@ tags:
     description: Iesnieguma pieņemšana un apskate (R1–R3)
   - name: Sistēma
     description: Tehniskie galapunkti (R4)
+  - name: Autentifikācija
+    description: Reģistrācija un pieteikšanās (CR-4)
+
+security:
+  - sessionCookie: []
 
 paths:
   /health:
@@ -29,6 +34,7 @@ paths:
       tags: [Sistēma]
       operationId: getHealth
       summary: Vai serviss darbojas
+      security: []
       responses:
         '200':
           description: Serviss darbojas
@@ -163,7 +169,134 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
+  /auth/register:
+    post:
+      tags: [Autentifikācija]
+      operationId: registerUser
+      summary: Reģistrēt lietotāju
+      description: |
+        Izveido lietotāja kontu (CR-4). Parole tiek glabāta tikai kā bcrypt
+        jaucējvērtība, nekad atklātā tekstā. E-pasts tiek glabāts mazajiem
+        burtiem un ir unikāls neatkarīgi no burtu reģistra.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              email: lietotajs@example.com
+              password: drosa-parole-1
+              passwordConfirm: drosa-parole-1
+      responses:
+        '201':
+          description: Konts izveidots
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/RegisterValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/EmailTaken'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/login:
+    post:
+      tags: [Autentifikācija]
+      operationId: loginUser
+      summary: Pieteikties
+      description: |
+        Pārbauda e-pastu un paroli. Veiksmes gadījumā izveido sesiju uz 8
+        stundām un iestata `HttpOnly`, `SameSite=Lax` sīkdatni `session`.
+        Datu bāzē tiek glabāta tikai sesijas marķiera SHA-256 jaucējvērtība.
+        Nepareizs e-pasts un nepareiza parole dod vienādu atbildi.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: lietotajs@example.com
+              password: drosa-parole-1
+      responses:
+        '200':
+          description: Pieteikšanās izdevās
+          headers:
+            Set-Cookie:
+              description: Sesijas sīkdatne `session`
+              schema:
+                type: string
+                example: session=abc123; HttpOnly; Max-Age=28800; Path=/; SameSite=lax
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/logout:
+    post:
+      tags: [Autentifikācija]
+      operationId: logoutUser
+      summary: Iziet
+      description: Beidz pašreizējo sesiju un dzēš sīkdatni `session`.
+      responses:
+        '204':
+          description: Sesija beigta
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/me:
+    get:
+      tags: [Autentifikācija]
+      operationId: getCurrentUser
+      summary: Pieteiktais lietotājs
+      responses:
+        '200':
+          description: Pieteiktā lietotāja dati
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: |
+        Sesijas sīkdatne, ko iestata `POST /auth/login` (CR-4).
+        Visi galapunkti, kuriem nav norādīts `security: []`, pieejami tikai
+        pieteiktiem lietotājiem; bez derīgas sesijas atbilde ir `401`.
+
   schemas:
     Health:
       type: object
@@ -174,7 +307,7 @@ components:
           example: ok
         version:
           type: string
-          example: 0.1.0
+          example: 0.2.0
 
     SubmissionCreate:
       type: object
@@ -289,6 +422,53 @@ components:
       enum: [RECEIVED, IN_PROGRESS, FORWARDED, ANSWERED, WITHDRAWN]
       example: RECEIVED
 
+    RegisterRequest:
+      type: object
+      required: [email, password, passwordConfirm]
+      properties:
+        email:
+          type: string
+          format: email
+          example: lietotajs@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Vismaz 8 rakstzīmes, ne vairāk kā 72 baiti (bcrypt ierobežojums)
+        passwordConfirm:
+          type: string
+          format: password
+          description: Jāsakrīt ar `password`
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: lietotajs@example.com
+        password:
+          type: string
+          format: password
+
+    User:
+      type: object
+      description: Lietotāja konts. Parole vai tās jaucējvērtība netiek atgriezta.
+      required: [id, email, createdAt]
+      properties:
+        id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+          example: lietotajs@example.com
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-10-14T09:00:00+00:00'
+
     Error:
       type: object
       description: Vienota kļūdu shēma visiem galapunktiem
@@ -344,6 +524,52 @@ components:
               details:
                 - field: personalCode
                   issue: INVALID_FORMAT
+    RegisterValidationError:
+      description: |
+        Reģistrācijas dati neatbilst noteikumiem. Iespējamās `details` vērtības:
+        `email`/`INVALID_FORMAT`, `password`/`TOO_SHORT`, `password`/`TOO_LONG`,
+        `passwordConfirm`/`DOES_NOT_MATCH`, `<lauks>`/`REQUIRED`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed
+              details:
+                - field: passwordConfirm
+                  issue: DOES_NOT_MATCH
+    EmailTaken:
+      description: Šis e-pasts jau ir reģistrēts
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: EMAIL_TAKEN
+              message: Email is already registered
+    InvalidCredentials:
+      description: Nepareizs e-pasts vai parole
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INVALID_CREDENTIALS
+              message: Invalid email or password
+    Unauthorized:
+      description: Nepieciešama pieteikšanās (nav derīgas sesijas)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: Authentication required
     NotFound:
       description: Iesniegums ar šādu ID nav atrasts
       content:

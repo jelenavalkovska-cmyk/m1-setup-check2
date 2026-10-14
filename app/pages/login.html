@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="lv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pieteikšanās · Ezermalas pieteikumu sistēma</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#5b6475; --accent:#1f5fbf; --err:#b42318; --ok:#067647; --border:#d6dae1; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --card:#1d2129; --text:#e7e9ee; --muted:#a3abb9; --accent:#6ea2f5; --err:#f97066; --ok:#47cd89; --border:#343a46; } }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:16px; background:var(--bg); color:var(--text); font:16px/1.5 system-ui, sans-serif; }
+  main { width:100%; max-width:380px; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:28px; }
+  h1 { margin:0 0 4px; font-size:1.4rem; }
+  p.sub { margin:0 0 20px; color:var(--muted); font-size:.9rem; }
+  label { display:block; margin:14px 0 4px; font-weight:600; font-size:.9rem; }
+  input { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font:inherit; }
+  button { width:100%; margin-top:20px; padding:11px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; }
+  .msg { margin-top:14px; font-size:.9rem; min-height:1.4em; }
+  .msg.err { color:var(--err); } .msg.ok { color:var(--ok); }
+  .alt { margin-top:18px; text-align:center; font-size:.9rem; color:var(--muted); }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pieteikšanās</h1>
+  <p class="sub">Ezermalas pieteikumu sistēma</p>
+  <form id="form" novalidate>
+    <label for="email">E-pasts</label>
+    <input id="email" name="email" type="email" autocomplete="username" required>
+    <label for="password">Parole</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Pieteikties</button>
+    <div id="msg" class="msg" role="status"></div>
+  </form>
+  <p class="alt">Nav konta? <a href="/register">Reģistrēties</a></p>
+</main>
+<script>
+async function postJson(url, data) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const body = res.status === 204 ? null : await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, body };
+}
+function show(el, text, kind) { el.textContent = text; el.className = 'msg ' + kind; }
+
+const form = document.getElementById('form'), msg = document.getElementById('msg');
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = form.querySelector('button'); btn.disabled = true;
+  try {
+    const res = await postJson('/auth/login', Object.fromEntries(new FormData(form)));
+    if (res.ok) { location.href = '/'; return; }
+    show(msg, res.status === 401 ? 'Nepareizs e-pasts vai parole.' : 'Pieteikšanās neizdevās. Pārbaudiet laukus.', 'err');
+  } catch { show(msg, 'Serveris nav sasniedzams.', 'err'); }
+  btn.disabled = false;
+});
+</script>
+</body>
+</html>

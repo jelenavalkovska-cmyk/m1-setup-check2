@@ -1,4 +1,4 @@
-.PHONY: verify-setup test lint-contract
+.PHONY: verify-setup test lint-contract install run
 
 verify-setup:
 	@python --version
@@ -12,3 +12,9 @@ test:
 
 lint-contract:
 	python tools/lint_contract.py docs/openapi.yaml
+
+install:
+	pip install -r requirements.txt
+
+run:
+	uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
